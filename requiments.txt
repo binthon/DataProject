@@ -1,5 +1,11 @@
-dotnet
-openai
+streamlit
+librosa
+numpy
+matplotlib
+seaborn
 pandas
+altair
+soundfile
 ollama
-wave
+torchaudio
+torch
