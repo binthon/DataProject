@@ -38,7 +38,6 @@ def analyzeAudio(file_path):
 
     return features, y, sr
 
-
 st.set_page_config(
     page_title="AI Music Analyser",
     page_icon="",
@@ -50,27 +49,77 @@ col = st.columns((2, 3, 2), gap='medium')
 
 with col[0]:
     st.title("🎧 AI Audio Analyzer")
-    st.write("Wgraj plik MP3/WAV, a my przeanalizujemy tempo i tonację.")
+    st.write("Wgraj plik MP3/WAV i przeanalizuj tempo i tonację.")
     uploaded_file = st.file_uploader("Wybierz plik audio", type=["mp3", "wav"])
 
     if uploaded_file:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-                tmp_file.write(uploaded_file.read())
-                temp_path = tmp_file.name
-                st.audio(temp_path)
-        if st.button("Zmień barwę i odtwórz"):
-            try:
-                result_path = mfcc.mfccReconstruction(temp_path)
-                st.success("Zmieniono barwę i zapisano plik!")
-                st.audio(result_path)
-            except Exception as e:
-                st.error(f"Błąd przy zmianie barwy: {e}")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmpFile:
+                tmpFile.write(uploaded_file.read())
+                tempPath = tmpFile.name
+                st.session_state.tempPath = tempPath
+                st.session_state.uploaded = True
+        if "originalAnalysis" not in st.session_state:
+            originalData, originalY, originalSR = analyzeAudio(tempPath)
+            st.session_state.originalAnalysis = originalData
+            st.session_state.originalAudioData = originalY
+            st.session_state.originalSampleRate = originalSR
+                
+        with st.form("mod_form", clear_on_submit=False):
+            st.markdown("### 🎛️ Dodaj modyfikacje barwy")
+            
+            if "modifications" not in st.session_state:
+                st.session_state.modifications = []
+            
+            toDelete = None 
+
+            for i, mod in enumerate(st.session_state.modifications):
+                st.markdown(f"#### Modyfikacja #{i+1}")
+                freq = st.slider(f"🎚️ Zakres częstotliwości #{i+1}", 0, 127, mod["freq"], key=f"freq_{i}")
+                change = st.slider(f"🎚️ Zmiana barwy #{i+1}", -3.0, 3.0, mod["change"], 0.1, key=f"change_{i}")
+                st.session_state.modifications[i] = {"freq": freq, "change": change}
+                if st.form_submit_button(f"🗑️ Usuń modyfikację #{i+1}"):
+                    toDelete = i
+
+            if toDelete is not None:
+                del st.session_state.modifications[toDelete]
+                if not st.session_state.modifications:
+                    st.session_state.pop("modified_audio", None)
+
+            add = st.form_submit_button("➕ Dodaj nową modyfikację")
+            apply = st.form_submit_button("🎧 Zastosuj modyfikacje")
+
+            if add:
+                st.session_state.modifications.append({"freq": (30, 40), "change": 1.0})
+
+            if apply and uploaded_file and st.session_state.modifications:
+                try:
+                    result_path = mfcc.mfccReconstruction(
+                        st.session_state.tempPath,
+                        st.session_state.modifications
+                    )
+                    st.session_state.modified_audio = result_path
+                    st.success("✅ Zmieniono barwę i zapisano plik!")
+                except Exception as e:
+                    st.error(f"Błąd przy zmianie barwy: {e}")
+            elif apply and not st.session_state.modifications:
+                st.warning("Brak modyfikacji – nie zastosowano zmian.")
+
+
+
+        if "modified_audio" in st.session_state:
+            st.audio(st.session_state.modified_audio)
+        else:
+            st.audio(st.session_state.tempPath)
 
         with col[1]:
             st.subheader("Analiza cech dźwięku")
 
             try:
-                data, y, sr = analyzeAudio(temp_path)
+                data = st.session_state.originalAnalysis
+                y = st.session_state.originalAudioData
+                sr = st.session_state.originalSampleRate
+
+
                 colInside = st.columns((2, 2), gap='medium')
 
                 with colInside[0]:
@@ -111,9 +160,9 @@ with col[0]:
                         st.markdown(f"- MFCC {i}: {coef}")
                     
                     st.markdown('### Heatmap MFCC')
-                    mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+                    mfccData = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
                     fig, ax = plt.subplots()
-                    img = librosa.display.specshow(mfcc, x_axis='time', sr=sr, ax=ax)
+                    img = librosa.display.specshow(mfccData, x_axis='time', sr=sr, ax=ax)
                     fig.colorbar(img, ax=ax)
                     ax.set(title='MFCC (czas vs współczynniki)')
                     st.pyplot(fig)
@@ -129,8 +178,6 @@ with col[0]:
                     plt.title("Średnie widmo częstotliwości")
                     plt.xlim(0, 8000)
                     st.pyplot(fig2)
-
-                    
 
                 with col[2]:
                     if st.button("Rozpoznaj gatunek na podstawie cech"):
@@ -159,4 +206,6 @@ with col[0]:
             except Exception as e:
                 st.error(f"Błąd podczas analizy: {str(e)}")
             finally:
-                os.unlink(temp_path)
+                if "modified_audio" in st.session_state:
+                    os.unlink(st.session_state.tempPath)
+
