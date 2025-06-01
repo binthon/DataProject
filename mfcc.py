@@ -6,10 +6,10 @@ import soundfile as sf
 N_FFT = 2048
 HOP = 512
 
-def mfccReconstruction(inputFile, outputFile="output.wav"):
-    waveform, sr = torchaudio.load(inputFile)  # [1, samples]
+def mfccReconstruction(inputFile, modyfikacja, outputFile="output.wav"):
+    waveform, sr = torchaudio.load(inputFile) 
 
-    # 1. MelSpectrogram (log)
+    #1 MelSpectrogram (log)
     mel_transform = T.MelSpectrogram(
         sample_rate=sr,
         n_fft=N_FFT,
@@ -20,13 +20,17 @@ def mfccReconstruction(inputFile, outputFile="output.wav"):
     mel_spec = mel_transform(waveform)  
     log_mel = torch.log(mel_spec + 1e-9) 
 
-    # 2. "Oszukana" manipulacja: 
-    log_mel[:, 30:40, :] += 1.2  
+    #2 "Oszukana" manipulacja: 
+    for mod in modyfikacja:
+        r1, r2 = mod["freq"]
+        change = mod["change"]
+        log_mel[:, r1:r2, :] += change
 
-    # 3. log-mel → mel
+
+    #3 log-mel → mel
     mel = torch.exp(log_mel)
 
-    # 4. Mel → Spectrogram
+    #4 Mel → Spectrogram
     mel_to_spec = T.InverseMelScale(
         n_stft=N_FFT // 2 + 1,
         n_mels=128,
@@ -34,11 +38,11 @@ def mfccReconstruction(inputFile, outputFile="output.wav"):
     )
     spec = mel_to_spec(mel)
 
-    # 5. Griffin-Lim: Spectrogram → Waveform
+    #5 Griffin-Lim: Spectrogram → Waveform
     griffin = T.GriffinLim(n_fft=N_FFT, hop_length=HOP)
     reconstructed = griffin(spec)
 
-    # 6. Zapis
+    #6 Zapis
     audio = reconstructed.squeeze()
     if audio.ndim == 2:  
         audio = audio[0]
