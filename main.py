@@ -1,43 +1,11 @@
 import streamlit as st
-import librosa
-import numpy as np
 import tempfile
 import os
-import ollama
 import altair as alt
-import matplotlib.pyplot as plt
-import librosa.display
-import seaborn as sns
-import pandas as pd
 import mfcc
-
-KEYS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-
-def analyzeAudio(file_path):
-    y, sr = librosa.load(file_path)
-
-    chroma = librosa.feature.chroma_stft(y=y, sr=sr)
-    mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-    mean_chroma = chroma.mean(axis=1)
-    top_notes = np.argsort(mean_chroma)[::-1][:3]
-    note_names = [KEYS[i] for i in top_notes]
-
-    features = {
-        "Tempo": "%.2f" % librosa.beat.beat_track(y=y, sr=sr)[0],
-        "Przybliżona tonacja": KEYS[np.argmax(mean_chroma)],
-        "Czas trwania": "%.2f" % librosa.get_duration(y=y, sr=sr),
-        "Zero Crossing Rate": "%.2f" % librosa.feature.zero_crossing_rate(y).mean(),
-        "Średnia RMS energia": "%.2f" % librosa.feature.rms(y=y).mean(),
-        "Spectral Centroid": "%.2f" % librosa.feature.spectral_centroid(y=y, sr=sr).mean(),
-        "Spectral Rolloff": "%.2f" % librosa.feature.spectral_rolloff(y=y, sr=sr).mean(),
-        "Spectral Bandwidth": "%.2f" % librosa.feature.spectral_bandwidth(y=y, sr=sr).mean(),
-        "Spectral Flatness": "%.2f" % librosa.feature.spectral_flatness(y=y).mean(),
-        "MFCC": ["%.2f" % x for x in mfccs.mean(axis=1)],
-        "Chroma": ", ".join(note_names)
-    }
-
-    return features, y, sr
-
+from connect import genreFeatures
+from audioFeatures import analyzeAudio
+from plots import *
 st.set_page_config(
     page_title="AI Music Analyser",
     page_icon="",
@@ -74,8 +42,8 @@ with col[0]:
 
             for i, mod in enumerate(st.session_state.modifications):
                 st.markdown(f"#### Modyfikacja #{i+1}")
-                freq = st.slider(f"🎚️ Zakres częstotliwości #{i+1}", 0, 127, mod["freq"], key=f"freq_{i}")
-                change = st.slider(f"🎚️ Zmiana barwy #{i+1}", -3.0, 3.0, mod["change"], 0.1, key=f"change_{i}")
+                freq = st.slider(f"Zakres częstotliwości #{i+1}", 0, 127, mod["freq"], key=f"freq_{i}")
+                change = st.slider(f"Zmiana barwy #{i+1}", -3.0, 3.0, mod["change"], 0.1, key=f"change_{i}")
                 st.session_state.modifications[i] = {"freq": freq, "change": change}
                 if st.form_submit_button(f"🗑️ Usuń modyfikację #{i+1}"):
                     toDelete = i
@@ -86,7 +54,7 @@ with col[0]:
                     st.session_state.pop("modified_audio", None)
 
             add = st.form_submit_button("➕ Dodaj nową modyfikację")
-            apply = st.form_submit_button("🎧 Zastosuj modyfikacje")
+            apply = st.form_submit_button("Zastosuj modyfikacje")
 
             if add:
                 st.session_state.modifications.append({"freq": (30, 40), "change": 1.0})
@@ -98,7 +66,7 @@ with col[0]:
                         st.session_state.modifications
                     )
                     st.session_state.modified_audio = result_path
-                    st.success("✅ Zmieniono barwę i zapisano plik!")
+                    st.success("Zmieniono barwę i zapisano plik!")
                 except Exception as e:
                     st.error(f"Błąd przy zmianie barwy: {e}")
             elif apply and not st.session_state.modifications:
@@ -128,31 +96,13 @@ with col[0]:
                         if key != "MFCC":
                             st.markdown(f"- **{key}**: {value}")
                     st.markdown("### Spektrogram logarytmiczny")
-                    fig, ax = plt.subplots(figsize=(10, 4))
-                    D = librosa.amplitude_to_db(np.abs(librosa.stft(y)), ref=np.max)
-                    img = librosa.display.specshow(D, sr=sr, x_axis='time', y_axis='log', ax=ax)
-                    fig.colorbar(img, ax=ax, format="%+2.0f dB")
-                    ax.set_title('Spektrogram (log-skala)')
-                    ax.set_xlabel("Czas [s]")
-                    ax.set_ylabel("Częstotliwość [Hz]")
-                    st.pyplot(fig)
+                    st.pyplot(plotSpectrogram(y, sr))
 
                     st.markdown ('### Amplituda w czasie')
-                    fig, ax = plt.subplots(figsize=(10, 4))
-                    librosa.display.waveshow(y, sr=sr, ax=ax)
-                    ax.set_title('Amplituda')
-                    ax.set_xlabel("Czas [s]")
-                    ax.set_ylabel("Amplituda")
-                    st.pyplot(fig)
-
+                    st.pyplot(plotWaveform(y, sr))
 
                     st.markdown("### Chroma Feature (rozkład nut w czasie)")
-                    fig, ax = plt.subplots(figsize=(10, 4))
-                    H  = librosa.feature.chroma_stft(y=y, sr=sr)
-                    img = librosa.display.specshow(H, x_axis='time', y_axis='chroma', cmap='coolwarm', sr=sr, ax=ax)
-                    fig.colorbar(img, ax=ax)
-                    ax.set(title='Chroma Features')
-                    st.pyplot(fig)
+                    st.pyplot(plotChroma(y, sr))
 
                 with colInside[1]:
                     st.markdown("### MFCC (średnie wartości):")
@@ -160,49 +110,17 @@ with col[0]:
                         st.markdown(f"- MFCC {i}: {coef}")
                     
                     st.markdown('### Heatmap MFCC')
-                    mfccData = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-                    fig, ax = plt.subplots()
-                    img = librosa.display.specshow(mfccData, x_axis='time', sr=sr, ax=ax)
-                    fig.colorbar(img, ax=ax)
-                    ax.set(title='MFCC (czas vs współczynniki)')
-                    st.pyplot(fig)
+                    st.pyplot(plotMfccHeatmap(y, sr))
 
                     st.markdown("### Widmo częstotliwości (średnie)")
-                    spectrum = np.abs(librosa.stft(y))
-                    mean_spectrum = np.mean(spectrum, axis=1)
-                    freqs = librosa.fft_frequencies(sr=sr)
-
-                    df_spectrum = pd.DataFrame({"Frequency [Hz]": freqs, "Amplitude": mean_spectrum})
-                    fig2 = plt.figure(figsize=(10, 3))
-                    sns.lineplot(data=df_spectrum, x="Frequency [Hz]", y="Amplitude")
-                    plt.title("Średnie widmo częstotliwości")
-                    plt.xlim(0, 8000)
-                    st.pyplot(fig2)
+                    st.pyplot(plotMeanSpectrum(y, sr))
 
                 with col[2]:
                     if st.button("Rozpoznaj gatunek na podstawie cech"):
-                        prompt = f"""
-                        Mam utwór muzyczny z następującymi cechami akustycznymi:
-
-                        - Tempo: {data['Tempo']} BPM
-                        - Tonacja: {data['Przybliżona tonacja']}
-                        - Czas trwania: {data['Czas trwania']} s
-                        - Zero Crossing Rate: {data['Zero Crossing Rate']}
-                        - RMS energia: {data['Średnia RMS energia']}
-                        - Spectral Centroid: {data['Spectral Centroid']}
-                        - Spectral Rolloff: {data['Spectral Rolloff']}
-                        - Spectral Bandwidth: {data['Spectral Bandwidth']}
-                        - Spectral Flatness: {data['Spectral Flatness']}
-                        - MFCC: {", ".join(data['MFCC'])}
-                        - Chroma: {data['Chroma']}
-
-
-                        Na podstawie tych cech, określ jaki to może być gatunek muzyczny.
-                        Uzasadnij odpowiedź. Odpowiedz po polsku.
-                                """
-                        response = ollama.chat(model='mistral', messages=[{"role": "user", "content": prompt}])
+                        genre_info = genreFeatures(data)
                         st.markdown("### 🎼 Rozpoznany gatunek muzyczny:")
-                        st.write(response['message']['content'])
+                        st.write(genre_info)
+
             except Exception as e:
                 st.error(f"Błąd podczas analizy: {str(e)}")
             finally:
